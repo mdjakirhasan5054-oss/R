@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Mini Game - Code Submit</title>
+<style>
+  body{font-family:Inter,Arial,Helvetica,sans-serif;background:#0b1020;color:#e6eef8;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+  .card{width:360px;background:#0f1724;padding:22px;border-radius:12px;box-shadow:0 6px 20px rgba(2,6,23,.6)}
+  h1{font-size:20px;margin:0 0 12px}
+  input,button,select{width:100%;padding:10px;border-radius:8px;border:1px solid #243141;background:#0b1220;color:#e6eef8;margin-top:8px;box-sizing:border-box}
+  button{background:#10b981;color:#021219;border:none;font-weight:600;cursor:pointer}
+  .small{font-size:13px;color:#9fb0c9;margin-top:8px}
+  .balance{margin-top:12px;font-size:16px;color:#7ee7b8}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>🎮 Mini Game — Code Submit</h1>
+
+    <label class="small">আপনার Telegram User ID বা Username (যেমন: 123456789 বা @username)</label>
+    <input id="telegramUserId" placeholder="Enter Telegram user id or @username" />
+
+    <label class="small">Referral (optional)</label>
+    <input id="referral" placeholder="Referrer username (optional)" />
+
+    <label class="small">Code A</label>
+    <input id="codeA" placeholder="Enter Code A" />
+    <label class="small">Code B</label>
+    <input id="codeB" placeholder="Enter Code B" />
+    <label class="small">Code C</label>
+    <input id="codeC" placeholder="Enter Code C" />
+
+    <button id="submitBtn">Submit 3 Codes</button>
+
+    <div class="balance">💰 Balance: <span id="balance">0.00</span> Taka</div>
+
+    <label class="small">Cashout Amount (Taka)</label>
+    <input id="cashoutAmount" type="number" placeholder="Enter amount to cashout" />
+    <button id="cashoutBtn">Request Cashout</button>
+
+    <div class="small" style="margin-top:12px;color:#93b4d6">
+      Notes: Min cashout = 50 Taka. Each code = 0.5 Taka.
+    </div>
+  </div>
+
+<script>
+const apiBase = ""; // If frontend served from same backend, leave empty. Otherwise set to backend base e.g. "https://your-backend.onrender.com"
+const submitBtn = document.getElementById('submitBtn');
+const cashoutBtn = document.getElementById('cashoutBtn');
+const balanceEl = document.getElementById('balance');
+
+let localBalance = 0;
+
+// Save balance to localStorage per user id (optional convenience)
+function saveLocalBalance(userId){
+  if(!userId) return;
+  localStorage.setItem('mini_game_bal_'+userId, JSON.stringify(localBalance));
+}
+function loadLocalBalance(userId){
+  if(!userId) return 0;
+  const v = localStorage.getItem('mini_game_bal_'+userId);
+  if(!v) return 0;
+  try{ return parseFloat(JSON.parse(v)) || 0; }catch(e){return 0;}
+}
+
+submitBtn.addEventListener('click', async ()=>{
+  const userId = document.getElementById('telegramUserId').value.trim();
+  const referral = document.getElementById('referral').value.trim() || null;
+  const codes = [
+    document.getElementById('codeA').value.trim(),
+    document.getElementById('codeB').value.trim(),
+    document.getElementById('codeC').value.trim()
+  ];
+
+  if(!userId) return alert("প্রথমে আপনার Telegram user id/username দিন।");
+  if(codes.some(c => c.length === 0)) return alert("সব তিনটি কোড দিন।");
+
+  // call backend
+  try{
+    const res = await fetch((apiBase||'') + "/api/logCode", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ userId, referral, codes })
+    });
+    const data = await res.json();
+    if(data.ok){
+      // backend returns new balance
+      localBalance = data.balance || (localBalance + (0.5 * codes.length));
+      balanceEl.innerText = localBalance.toFixed(2);
+      saveLocalBalance(userId);
+      alert("Codes submitted. Channel logged.");
+      // clear inputs
+      document.getElementById('codeA').value = '';
+      document.getElementById('codeB').value = '';
+      document.getElementById('codeC').value = '';
+    } else {
+      alert(data.error || "Submit failed");
+    }
+  }catch(err){
+    console.error(err);
+    alert("Submission failed (network).");
+  }
+});
+
+cashoutBtn.addEventListener('click', async ()=>{
+  const userId = document.getElementById('telegramUserId').value.trim();
+  const amount = parseFloat(document.getElementById('cashoutAmount').value || 0);
+  if(!userId) return alert("প্রথমে আপনার Telegram user id/username দিন।");
+  if(!amount || amount <= 0) return alert("একটি বৈধ পরিমাণ দিন।");
+  if(amount < 50) return alert("ন্যূনতম ক্যাশআউট ৫০ টাকা!");
+  if(amount > localBalance) return alert("পর্যাপ্ত ব্যালেন্স নেই!");
+
+  try{
+    const res = await fetch((apiBase||'') + "/api/cashout", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ userId, amount })
+    });
+    const data = await res.json();
+    if(data.ok){
+      localBalance = data.balance || (localBalance - amount);
+      balanceEl.innerText = localBalance.toFixed(2);
+      saveLocalBalance(userId);
+      alert("Cashout request sent and logged to channel (Pending).");
+      document.getElementById('cashoutAmount').value = '';
+    } else {
+      alert(data.error || "Cashout failed");
+    }
+  }catch(err){
+    console.error(err);
+    alert("Cashout failed (network).");
+  }
+});
+
+// on page load try to restore last balance for entered id (if user types)
+document.getElementById('telegramUserId').addEventListener('blur', (e)=>{
+  const v = e.target.value.trim();
+  if(!v) return;
+  localBalance = loadLocalBalance(v);
+  balanceEl.innerText = localBalance.toFixed(2);
+});
+</script>
+</body>
+</html>
