@@ -1,0 +1,113 @@
+// server.js
+import express from "express";
+import fetch from "node-fetch";
+import { Low, JSONFile } from "lowdb";
+import { join } from "path";
+import fs from "fs";
+
+const app = express();
+app.use(express.json());
+
+// LowDB setup (file-based json storage)
+const file = join(process.cwd(), 'db.json');
+if(!fs.existsSync(file)){
+  fs.writeFileSync(file, JSON.stringify({ users: {} }, null, 2));
+}
+const adapter = new JSONFile(file);
+const db = new Low(adapter);
+
+// Telegram Bot (filled with token you provided earlier)
+const BOT_TOKEN = "7843660568:AAFBcVuJ_4zoC5k7BNodp9gmntnLswnTjUM"; // <-- your token
+const CHANNEL_ID = "@Bdboyonline"; // <-- your channel username
+
+// helper: send message
+async function sendTelegram(text){
+  try{
+    const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
+    const body = { chat_id: CHANNEL_ID, text, parse_mode: "HTML" };
+    const resp = await fetch(url, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body) });
+    return resp.ok;
+  }catch(e){
+    console.error("Telegram send error:", e);
+    return false;
+  }
+}
+
+// initialize DB in memory
+await db.read();
+db.data ||= { users: {} };
+await db.write();
+
+// POST /api/logCode
+// body: { userId, referral (optional), codes: ["A","B","C"] }
+app.post("/api/logCode", async (req, res) => {
+  const { userId, referral, codes } = req.body;
+  if(!userId || !codes || !Array.isArray(codes)) return res.status(400).json({ ok:false, error: "Missing data" });
+
+  await db.read();
+  db.data.users[userId] ||= { balance: 0, submissions: [], referrer: null };
+
+  // set referrer first time if provided
+  if(referral && !db.data.users[userId].referrer){
+    db.data.users[userId].referrer = referral;
+    // credit referrer 1 Taka (create account if needed)
+    db.data.users[referral] ||= { balance:0, submissions:[], referrer: null };
+    db.data.users[referral].balance += 1;
+  }
+
+  // add codes (single-use per user)
+  let added = 0;
+  for(const c of codes){
+    if(!db.data.users[userId].submissions.includes(c)){
+      db.data.users[userId].submissions.push(c);
+      db.data.users[userId].balance += 0.5; // 0.5 Taka per code
+      added++;
+    }
+  }
+
+  await db.write();
+
+  const text = `🆕 <b>Code Submission</b>\nUser: ${userId}\nCodes: ${codes.join(", ")}\nNew Balance: ${db.data.users[userId].balance.toFixed(2)} Taka\nAdded Codes: ${added}\nReferrer: ${db.data.users[userId].referrer || "None"}`;
+  await sendTelegram(text);
+
+  return res.json({ ok:true, balance: db.data.users[userId].balance });
+});
+
+// POST /api/cashout
+// body: { userId, amount }
+app.post("/api/cashout", async (req, res) => {
+  const { userId, amount } = req.body;
+  if(!userId || !amount) return res.status(400).json({ ok:false, error: "Missing data" });
+
+  await db.read();
+  const user = db.data.users[userId];
+  if(!user) return res.status(400).json({ ok:false, error:"User not found" });
+
+  // amount is in Taka
+  if(user.balance < amount) return res.json({ ok:false, error:"Insufficient balance" });
+  // optional: minimum 50 Taka for cashout
+  if(amount < 50) return res.json({ ok:false, error:"Minimum cashout 50 Taka" });
+
+  user.balance = +(user.balance - amount).toFixed(2);
+  // create a pending cashout record in user (optional)
+  user.lastCashout = { amount, requestedAt: new Date().toISOString(), status: "pending" };
+  await db.write();
+
+  const text = `💸 <b>Cashout Request</b>\nUser: ${userId}\nAmount: ${amount} Taka\nStatus: Pending`;
+  await sendTelegram(text);
+
+  return res.json({ ok:true, balance: user.balance });
+});
+
+// endpoint to view user (for admin quick-check) - optional
+app.get("/api/user/:id", async (req, res) => {
+  const id = req.params.id;
+  await db.read();
+  const u = db.data.users[id];
+  if(!u) return res.status(404).json({ ok:false, error:"Not found" });
+  return res.json({ ok:true, user: u });
+});
+
+// start server
+const port = process.env.PORT || 3000;
+app.listen(port, ()=> console.log(`Server listening on ${port}`));
